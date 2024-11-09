@@ -1,2 +1,2 @@
-#**GPT from scratch: PyTorch**
-##**Next word prediction**
+# **GPT from scratch: PyTorch**
+## **Next word prediction**
