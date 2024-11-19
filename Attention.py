@@ -51,7 +51,7 @@ class HardAttentionHead(torch.nn.Module):
         #### Attention
         q = self.query(x) # Query: [N,T,D'] -> [N,T,D]
         k = self.key(x) # Key: [N,T,D'] -> [N,T,D]
-        Att = torch.bmm(q,k.permute((0,2,1))) # Attention Map: QK^T, [N,T,T]
+        Att = torch.bmm(q,k.permute((0,2,1)))*(1/torch.sqrt(torch.tensor(self.embedding_size))) # Attention Map: QK^T, [N,T,T]
         Att = torch.masked_fill(torch.tril(Att),Att==0,float('-inf')) # (QK^T)o(M) -> [N,T,T]
         Att = torch.nn.functional.softmax(Att,dim=-1) # Softmax, [N,T,T]
         v = self.value(x) # Value: [N,T,D'] -> [N,T,D]
