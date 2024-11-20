@@ -8,6 +8,7 @@ import tqdm
 import torch
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from Preprocess import preprocess
 from VocabularyGen import vocab_gen
@@ -15,7 +16,8 @@ from DataLoader import DataSet
 from GloVe_Layer import Glove_Gen
 from PositionalEncoding import positionalencoding
 from Attention import MHSA
-from Perplexity import test 
+from AttentionMaps import attn_map
+from Generate import generate
 
 ####### Input arguments
 parser = argparse.ArgumentParser()
@@ -35,9 +37,9 @@ parser.add_argument('--batch_size',
 parser.add_argument('--model_name',
                     type=str,
                     help="Name of the model to be saved")
-parser.add_argument('--train_mode',
+parser.add_argument('--mode',
                     type=str,
-                    help='full or full_width')
+                    help='attn_map, generate, generate_beam')
 
 args = parser.parse_args()
 print('Importing and parsing done')
@@ -153,138 +155,31 @@ class model(torch.nn.Module):
 
         return out, attn
 
-tx_model = model(input_dim,d_model,args.num_heads,vocab_size,word2idx).to(device)
+tx_model = model(input_dim,d_model,args.num_heads,vocab_size,word2idx)
+tx_model.load_state_dict(torch.load('./Models/'+args.model_name+'.pth'))
+tx_model = tx_model.to(device)
 print('Model Formulated')
-#input = torch.randint(low=0,high=1000,size=(32,args.context_window)).long().to(device)
-#out, attn = tx_model.forward(input)
-#print(out.shape, attn.shape)
 
-###### Training
+###### Attention map generation
 
-##### Training Step
-def train_epoch(dataloader, model, optimizer, criterion, train_mode):
+if(args.mode == 'attn_map'):
+    inp_1 = TestDataset.__getitem__(80)['data']
+    inp_1 = inp_1.unsqueeze(0)
+    inp_1 = inp_1.to(device)
+    out, attn = tx_model.forward(inp_1)
+    attn_map(attn,4,inp_1,idx2word)
 
-    loss_total = 0.0
-    perplexity_total = 0.0
+if(args.mode == 'gen'):
+    inp_1 = TestDataset.__getitem__(30)
+    op = generate(inp_1,tx_model,args.context_window,100,idx2word,False,5)
+    
+    input_sentence = []
+    for item in (inp_1['data'].cpu().numpy()):
+        input_sentence.append(idx2word[int(item)])
+    print('=============================================')
+    print('INPUT')
+    print(" ".join(input_sentence))
+    print(" ")
+    print('OUTPUT')
+    print(" ".join(op))
 
-    for item in tqdm.tqdm(iter(dataloader),colour='blue'):
-
-        data = item['data']
-
-        if(train_mode == 'full'):
-
-            x = data[:,:-1] # Context window
-            y = data[:,-1] # Label
-
-            x = x.to(device)
-            y = y.to(device)
-
-            with torch.set_grad_enabled(True):
-
-                out, _ = model.forward(x) # Forward pass
-                loss_curr = criterion(out,y) 
-
-                loss_curr.backward()
-                optimizer.step()
-
-            loss_total += loss_curr.item()*x.size(0)
-
-        if(train_mode == 'full_width'): 
-
-            for i in range(args.context_window):
-
-                x = data[:,0:(i+1)]   
-                y = data[:,(i+1)]
-
-                x = x.to(device)
-                y = y.to(device)
-
-                with torch.set_grad_enabled(True):
-
-                    out, _ = model.forward(x) # Forward pass
-                    loss_curr = criterion(out,y) 
-
-                    loss_curr.backward()
-                    optimizer.step()
-
-                loss_total += loss_curr.item()*x.size(0)
-
-    if(train_mode == 'full'):
-        loss_total = loss_total/train_total
-
-    if(train_mode == 'full_width'):
-        loss_total = loss_total/(train_total*(args.context_window))
-
-    return loss_total
-
-##### Validation step
-def val_epoch(dataloader, model, criterion):
-
-    loss_total = 0.0
-
-    for item in tqdm.tqdm(iter(dataloader),colour='green'):
-
-        data = item['data']
-
-        x = data[:,:-1] # Context window
-        y = data[:,-1] # Label
-
-        x = x.to(device)
-        y = y.to(device)
-        
-        with torch.set_grad_enabled(False):
-            out, _ = model.forward(x)
-            loss = criterion(out,y)
-
-            loss_total += loss.item()*x.size(0)
-
-    loss_total = loss_total/val_total
-    return loss_total
-
-###### Training Validation Loop
-def train_val(train_loader, val_loader, test_loader, model, optimizer, criterion, criterion_test, num_epochs):
-
-    model_path = './Models/'+args.model_name+'.pth'
-    loss_best = 1e+6
-    ppl_best = 1e+6
-
-    for epoch in tqdm.tqdm(range(num_epochs),colour='yellow'):
-
-        time_start = time.time()
-        print(f'Epoch {epoch+1}/{num_epochs}')
-        print('-' * 10)
-
-        #### Training
-        train_loss_epoch = train_epoch(train_loader,model,optimizer,criterion,args.train_mode)
-        train_loss.append(train_loss_epoch)
-
-        #### Validation
-        val_loss_epoch = val_epoch(val_loader,model,criterion)
-        val_loss.append(val_loss_epoch)
-
-        #### Testing
-        test_ppl = test(test_loader,model,criterion_test,args.context_window)
-
-        #### Saving
-        if(val_loss_epoch < loss_best):
-            loss_best = val_loss_epoch
-            torch.save(model.state_dict(),model_path)
-            ppl_best = test_ppl
-
-        #### Outputs
-        print('Total time:'+str(time.time() - time_start))
-        print('Loss: '+str(train_loss_epoch))
-        print('Validation Loss: '+str(val_loss_epoch))
-        print('PPL: '+str(test_ppl))
-
-    return train_loss, val_loss, ppl_best
-
-###### Training and Validation
-criterion = torch.nn.CrossEntropyLoss()
-criterion_test = torch.nn.CrossEntropyLoss(reduction='none')
-optimizer = torch.optim.Adam(tx_model.parameters(),lr=1e-3)
-train_loss, val_loss, ppl_best = train_val(TrainLoader,ValLoader,TestLoader,tx_model,optimizer,criterion,criterion_test,50)
-
-print('PPL Model: '+str(ppl_best))
-np.savez_compressed('./Loss/'+args.model_name+'_trainloss.npz',np.array(train_loss))
-np.savez_compressed('./Loss/'+args.model_name+'_valloss.npz',np.array(val_loss))
